@@ -159,7 +159,7 @@ class File:
     def can_handle(cls, path):
         """Returns whether this file wrapper class can handle ``path``.
         """
-        return not path.islink() and path.isfile()
+        return path.isfile()
 
     def rename(self, newname):
         if newname == self.name:
