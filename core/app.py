@@ -9,6 +9,7 @@ import os.path as op
 import logging
 import subprocess
 import re
+import shlex
 import shutil
 
 from send2trash import send2trash
@@ -59,6 +60,7 @@ class JobType:
     Move = "job_move"
     Copy = "job_copy"
     Delete = "job_delete"
+    CustomCommand = "job_customcommand"
 
 
 class AppMode:
@@ -73,6 +75,7 @@ JOBID2TITLE = {
     JobType.Move: tr("Moving"),
     JobType.Copy: tr("Copying"),
     JobType.Delete: tr("Sending to Trash"),
+    JobType.CustomCommand: tr("Invoking custom command"),
 }
 
 
@@ -324,7 +327,7 @@ class DupeGuru(Broadcaster):
             self._recreate_result_table()
             self._results_changed()
             self.view.show_results_window()
-        if jobid in {JobType.Copy, JobType.Move, JobType.Delete}:
+        if jobid in {JobType.Copy, JobType.Move, JobType.Delete, JobType.CustomCommand}:
             if self.results.problems:
                 self.problem_dialog.refresh()
                 self.view.show_problem_dialog()
@@ -335,6 +338,7 @@ class DupeGuru(Broadcaster):
                     JobType.Delete: tr(
                         "All marked files were successfully sent to Trash."
                     ),
+                    JobType.CustomCommand: tr("All marked files were processed successfully."),
                 }[jobid]
                 self.view.show_message(msg)
 
@@ -547,13 +551,45 @@ class DupeGuru(Broadcaster):
                 type(e), str(dupe.path), str(e))
             return empty_data()
 
-    def invoke_custom_command(self):
+    def invoke_custom_command_sub(self, cmd, dupe):
         """Calls command in ``CustomCommand`` pref with ``%d`` and ``%r`` placeholders replaced.
 
         Using the current selection, ``%d`` is replaced with the currently selected dupe and ``%r``
         is replaced with that dupe's ref file. If there's no selection, the command is not invoked.
         If the dupe is a ref, ``%d`` and ``%r`` will be the same.
         """
+        group = self.results.get_group_of_duplicate(dupe)
+        cmd = cmd.format(dupe=shlex.quote(str(dupe.path)), ref=shlex.quote(str(group.ref.path)))
+        match = re.match(r'"([^"]+)"(.*)', cmd)
+        try:
+            if match is not None and os.name == 'nt':
+                # This code here is because subprocess. Popen doesn't seem to accept, under Windows,
+                # executable paths with spaces in it, *even* when they're enclosed in "". So this is
+                # a workaround to make the damn thing work.
+                exepath, args = match.groups()
+                path, exename = op.split(exepath)
+                subprocess.run(exename + args, cwd=path, shell=True, check=True, text=True, stderr=subprocess.PIPE)
+            else:
+                subprocess.run(cmd, shell=True, check=True, text=True, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            e.cmd = "{cmd}' stderr:\n{}\nCommand '{cmd}".format(e.stderr.rstrip('\n'), cmd=e.cmd)
+            raise
+
+    def invoke_custom_command(self):
+        """Start an async custom command job on marked duplicates.
+        """
+
+        def do(j):
+            def op(dupe):
+                j.add_progress()
+                self.invoke_custom_command_sub(cmd, dupe)
+
+            j.start_job(self.results.mark_count)
+            self.results.perform_on_marked(op, False)
+
+        if not self.results.mark_count:
+            self.view.show_message(MSG_NO_MARKED_DUPES)
+            return
         cmd = self.view.get_default("CustomCommand")
         if not cmd:
             msg = tr(
@@ -561,23 +597,7 @@ class DupeGuru(Broadcaster):
             )
             self.view.show_message(msg)
             return
-        if not self.selected_dupes:
-            return
-        dupe = self.selected_dupes[0]
-        group = self.results.get_group_of_duplicate(dupe)
-        ref = group.ref
-        cmd = cmd.replace("%d", str(dupe.path))
-        cmd = cmd.replace("%r", str(ref.path))
-        match = re.match(r'"([^"]+)"(.*)', cmd)
-        if match is not None:
-            # This code here is because subprocess. Popen doesn't seem to accept, under Windows,
-            # executable paths with spaces in it, *even* when they're enclosed in "". So this is
-            # a workaround to make the damn thing work.
-            exepath, args = match.groups()
-            path, exename = op.split(exepath)
-            subprocess.Popen(exename + args, shell=True, cwd=path)
-        else:
-            subprocess.Popen(cmd, shell=True)
+        self._start_job(JobType.CustomCommand, do)
 
     def load(self):
         """Load directory selection and ignore list from files in appdata.
