@@ -5,8 +5,11 @@
 # http://www.gnu.org/licenses/gpl-3.0.html
 
 import logging
+from hscommon.util import get_file_ext
 
+import av
 from PyQt5.QtGui import QImage, QImageReader, QTransform
+from PIL.ImageQt import ImageQt
 
 from core.pe.photo import Photo as PhotoBase
 
@@ -16,18 +19,30 @@ from .block import getblocks
 class File(PhotoBase):
     def _plat_get_dimensions(self):
         try:
-            ir = QImageReader(str(self.path))
-            size = ir.size()
-            if size.isValid():
-                return (size.width(), size.height())
+            path = str(self.path)
+            if get_file_ext(path) in self.FFMPEG_EXTS:
+                with av.open(path) as container:
+                    frame = next(container.decode(video=0))
+                    return (frame.width, frame.height)
             else:
-                return (0, 0)
-        except EnvironmentError:
+                ir = QImageReader(path)
+                size = ir.size()
+                if not size.isValid():
+                    return (0, 0)
+                return (size.width(), size.height())
+        except (EnvironmentError, av.error.InvalidDataError):
             logging.warning("Could not read image '%s'", str(self.path))
             return (0, 0)
 
     def _plat_get_blocks(self, block_count_per_side, orientation):
-        image = QImage(str(self.path))
+        path = str(self.path)
+        if get_file_ext(path) in self.FFMPEG_EXTS:
+            with av.open(path) as container:
+                frame = next(container.decode(video=0))
+                image = ImageQt(frame.to_image())
+        else:
+            image = QImage(path)
+
         image = image.convertToFormat(QImage.Format_RGB888)
         if type(orientation) == str:
             logging.warning("Orientation for file '%s' was a str '%s', not an int.",

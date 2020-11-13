@@ -29,7 +29,10 @@ class Photo(fs.File):
     __slots__ = fs.File.__slots__ + tuple(INITIAL_INFO.keys())
 
     # These extensions are supported on all platforms
-    HANDLED_EXTS = {"png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif"}
+    NATIVE_EXTS = {"png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif"}
+    FFMPEG_EXTS = {"apng", "asf", "wmv", "avi", "flv", "h261", "h263", "ico", "mkv", "mjpg", "mjpeg", "mp4",
+                   "mpg", "mpeg", "ts", "m2t", "m2ts", "mts", "nut", "webm"}
+    HANDLED_EXTS = NATIVE_EXTS | FFMPEG_EXTS
 
     def _plat_get_dimensions(self):
         raise NotImplementedError()
